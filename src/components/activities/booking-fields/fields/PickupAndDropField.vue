@@ -80,6 +80,7 @@
 </template>
 
 <script setup>
+import { toLocalYMD, parseYMD } from "@/utils/date";
 import { computed, ref, watch } from "vue";
 
 const props = defineProps({
@@ -120,17 +121,17 @@ const todayDate = new Date();
 // Only past dates are actually barred - same-day/lead-time rules are the
 // backend's job (it already reports them back via check-available), so the
 // picker itself shouldn't pre-emptively rule out today.
-const todayString = todayDate.toISOString().split("T")[0];
+const todayString = toLocalYMD(todayDate);
 
 const tomorrow = new Date(todayDate);
 tomorrow.setDate(tomorrow.getDate() + 1);
 
-const tomorrowString = tomorrow.toISOString().split("T")[0];
+const tomorrowString = toLocalYMD(tomorrow);
 
 const dayAfterTomorrow = new Date(todayDate);
 dayAfterTomorrow.setDate(dayAfterTomorrow.getDate() + 2);
 
-const dayAfterTomorrowString = dayAfterTomorrow.toISOString().split("T")[0];
+const dayAfterTomorrowString = toLocalYMD(dayAfterTomorrow);
 
 // ---------------------------------------------------------------------
 // Pickup time slot generation
@@ -248,7 +249,7 @@ const slotDateTime = (dateStr, hhmm) => {
   return new Date(year, month - 1, day, hours, minutes, 0, 0);
 };
 
-const formatDateToYMD = (date) => date.toISOString().split("T")[0];
+const formatDateToYMD = toLocalYMD;
 
 const MAX_LOOKAHEAD_DAYS = 90;
 
@@ -358,12 +359,12 @@ const minimumReturnDate = computed(() => {
 watch(
   pickupDate,
   (newPickup) => {
-    const pickup = new Date(newPickup);
-    const drop = new Date(returnDate.value);
+    const pickup = parseYMD(newPickup);
+    const drop = parseYMD(returnDate.value);
 
     if (drop <= pickup) {
       pickup.setDate(pickup.getDate() + 1);
-      props.form.return_date = pickup.toISOString().split("T")[0];
+      props.form.return_date = toLocalYMD(pickup);
     }
   },
   {
