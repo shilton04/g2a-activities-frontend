@@ -34,7 +34,11 @@
       </p>
 
       <div
-        v-if="settings.showPrice && !product.out_of_stock"
+        v-if="
+          settings.showPrice &&
+          !product.out_of_stock &&
+          (!enquiry || product.starting_price)
+        "
         class="g2a-book-widget__price-section"
       >
         <div class="g2a-book-widget__label">
@@ -78,8 +82,20 @@
         </div>
       </div>
 
+      <iframe
+        v-if="isInlineEnquiry"
+        ref="tallyFrame"
+        :data-tally-src="tallyEmbedUrl"
+        :title="product.name"
+        class="g2a-book-widget__enquiry-form"
+        loading="lazy"
+        width="100%"
+        height="400"
+        frameborder="0"
+      ></iframe>
+
       <button
-        v-if="settings.showButton"
+        v-else-if="settings.showButton"
         class="g2a-book-widget__button"
         :disabled="product.out_of_stock"
         @click="bookNow"
@@ -87,7 +103,9 @@
         {{
           product.out_of_stock
             ? settings.outOfStockButtonText
-            : settings.buttonText
+            : enquiry
+              ? settings.enquiryButtonText
+              : settings.buttonText
         }}
       </button>
     </div>
@@ -95,7 +113,31 @@
 </template>
 
 <script setup>
-import { computed } from "vue";
+import { computed, onMounted, ref } from "vue";
+
+const TALLY_SCRIPT_SRC = "https://tally.so/widgets/embed.js";
+
+let tallyScriptPromise = null;
+
+function loadTally() {
+  if (window.Tally) return Promise.resolve(window.Tally);
+
+  if (!tallyScriptPromise) {
+    tallyScriptPromise = new Promise((resolve, reject) => {
+      const script = document.createElement("script");
+      script.src = TALLY_SCRIPT_SRC;
+      script.async = true;
+      script.onload = () => resolve(window.Tally);
+      script.onerror = () => {
+        tallyScriptPromise = null;
+        reject(new Error("Failed to load Tally"));
+      };
+      document.head.appendChild(script);
+    });
+  }
+
+  return tallyScriptPromise;
+}
 
 const props = defineProps({
   product: {
@@ -112,7 +154,16 @@ const props = defineProps({
     type: Object,
     default: () => ({}),
   },
+
+  // Set when the product isn't in the booking engine yet: { formId, display }.
+  // The card then opens a Tally form instead of linking to the booking page.
+  enquiry: {
+    type: Object,
+    default: null,
+  },
 });
+
+const tallyFrame = ref(null);
 
 const settings = computed(() => ({
   showImage: true,
@@ -126,6 +177,8 @@ const settings = computed(() => ({
   showProductName: true,
 
   buttonText: "Book Now",
+
+  enquiryButtonText: "Book Now",
 
   outOfStockText: "Currently Unavailable",
 
@@ -160,7 +213,72 @@ function formatPrice(price) {
   return Number(price).toLocaleString("en-IN");
 }
 
+const isInlineEnquiry = computed(
+  () => props.enquiry?.display === "inline"
+);
+
+// Passed to Tally as hidden fields so submissions say which experience
+// (and which page) the enquiry came from.
+const tallyHiddenFields = computed(() => ({
+  slug: props.product.slug,
+  product: props.product.name,
+  page: window.location.href,
+}));
+
+const tallyEmbedUrl = computed(() => {
+  if (!props.enquiry) return null;
+
+  const params = new URLSearchParams({
+    alignLeft: "1",
+    hideTitle: "1",
+    transparentBackground: "1",
+    dynamicHeight: "1",
+    ...tallyHiddenFields.value,
+  });
+
+  return `https://tally.so/embed/${props.enquiry.formId}?${params}`;
+});
+
+onMounted(async () => {
+  if (!isInlineEnquiry.value) return;
+
+  try {
+    const Tally = await loadTally();
+    Tally.loadEmbeds();
+  } catch {
+    // Without the script the form still works, just without auto-height.
+    if (tallyFrame.value) tallyFrame.value.src = tallyEmbedUrl.value;
+  }
+});
+
+async function openEnquiry() {
+  const { formId } = props.enquiry;
+
+  try {
+    const Tally = await loadTally();
+
+    Tally.openPopup(formId, {
+      layout: "modal",
+      width: 500,
+      hiddenFields: tallyHiddenFields.value,
+    });
+  } catch {
+    const params = new URLSearchParams(tallyHiddenFields.value);
+
+    window.open(
+      `https://tally.so/r/${formId}?${params}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+}
+
 function bookNow() {
+  if (props.enquiry) {
+    openEnquiry();
+    return;
+  }
+
   if (!bookingUrl.value) return;
 
   window.open(bookingUrl.value, "_blank", "noopener,noreferrer");
@@ -266,6 +384,12 @@ function bookNow() {
 .g2a-book-widget__button:disabled {
   background: #ccc;
   cursor: not-allowed;
+}
+
+.g2a-book-widget__enquiry-form {
+  display: block;
+  width: 100%;
+  border: none;
 }
 
 .g2a-book-widget--disabled {

@@ -76,6 +76,46 @@ Displays a configurable booking card for a single product. The widget fetches li
 
 ---
 
+## Tally Enquiry Fallback
+
+Some experiences aren't in the booking engine yet. If the API returns **404** for `data-slug`, the widget still renders an "available" card and the button opens a Tally form instead of the booking page. Once a product with the same slug is added to the booking engine, the live bookable card takes over automatically.
+
+The client embed needs nothing extra — just `data-slug`. Name, price, location and form come from the [enquiry Google Sheet](https://docs.google.com/spreadsheets/d/1E1VNTSHJNpO0Iquc7XppDa8BR-TAGS9hmVuEhN6u3EY/edit) (read at runtime, so edits go live without a rebuild). It must be shared as "Anyone with the link: Viewer". Row 1 is the header:
+
+| Category | Name | Location | URL | Tally Forms | Price | Price Type | Slug *(optional)* |
+|----------|------|----------|-----|-------------|-------|------------|------|
+| Day Trips | Port Blair Full Day Trip | Port Blair | https://go2andaman.com/book/port-blair-full-day-trip/ | https://tally.so/r/wkVkre | 3000 | Starts From | |
+
+- **Slug** — the widget's `data-slug`. If empty, it's the last segment of **URL** (`port-blair-full-day-trip`). Fill it in when the booking slug differs from the URL.
+- **Tally Forms** — form link or bare ID.
+- **Price Type** — `Starts From` (default) or `Flat`.
+- Optional extra columns: `Per` (unit after the price, default `guest`), `Description`, `Image`, `Max Guests`. Other columns (e.g. Category) are ignored.
+- If a slug appears in several rows, the first row wins. A row with Slug `default` supplies the form for rows/slugs without one.
+
+See `enquiryProducts.js`.
+
+Any of the attributes below on the embed override the sheet:
+
+| Attribute | Default | Description |
+|-----------|:-------:|-------------|
+| `data-tally-form-id` | - | Tally form ID (the `xxxx` in `tally.so/r/xxxx`). Enables the fallback |
+| `data-tally-display` | `popup` | `popup` opens the form in a modal from the button; `inline` embeds the form in the card |
+| `data-name` | Title-cased slug | Product name |
+| `data-price` | - | Starting price shown on the card |
+| `data-pricing-mode` | `guest` | Unit after the price (`₹6,500 / guest`) |
+| `data-price-type` | `SLOT` | `SLOT`/`KM_BASED` show "Starting from", anything else "Flat Price" |
+| `data-location` | - | Location line |
+| `data-description` | - | Short description |
+| `data-image` | - | Image URL |
+| `data-max-guests` | - | Max guests line |
+| `data-enquiry-button-text` | `data-button-text` | Button text in fallback mode |
+
+The form receives hidden fields `slug`, `product` and `page` — add matching hidden fields in Tally to capture them.
+
+Errors other than 404 (or a 404 without `data-tally-form-id`) still show the error.
+
+---
+
 ## Common Configurations
 
 ### Minimal
