@@ -2,6 +2,7 @@ import BookingPriceWidget from "./BookingPriceWidget.vue";
 
 import { mountWidget } from "../shared/mount";
 import { getProduct } from "../shared/api";
+import { getEnquiryConfig } from "./enquiryProducts";
 
 function getBoolean(value, defaultValue = true) {
   if (value === undefined) {
@@ -13,6 +14,36 @@ function getBoolean(value, defaultValue = true) {
 
 function getString(value, defaultValue = "") {
   return value ?? defaultValue;
+}
+
+function titleFromSlug(slug) {
+  return slug
+    .split("-")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+// Builds a product-shaped object for a slug that isn't in the booking engine
+// yet, from its enquiry-sheet row overlaid with any data-* attributes, so the
+// card can fall back to a Tally enquiry form instead of erroring.
+function getEnquiryProduct(dataset, config) {
+  return {
+    name: getString(config.name, titleFromSlug(dataset.slug)),
+    slug: dataset.slug,
+    short_description: getString(config.description),
+    thumbnail_url: getString(config.image),
+    // Tolerates "₹6,500"-style values typed into the sheet.
+    starting_price:
+      Number(String(config.price ?? "").replace(/[^\d.]/g, "")) || null,
+    price_type: getString(config.priceType, "SLOT"),
+    pricing_mode: getString(config.pricingMode, "guest"),
+    max_bookable_per_booking: config.maxGuests
+      ? Number(config.maxGuests)
+      : null,
+    selectedLocation: config.location ? { name: config.location } : null,
+    locations: [],
+    out_of_stock: false,
+  };
 }
 
 document
@@ -33,12 +64,41 @@ document
           throw new Error("Missing data-slug.");
         }
 
-        const product = await getProduct(slug);
+        let product;
+        let enquiry = null;
+
+        try {
+          product = await getProduct(slug);
+        } catch (err) {
+          if (err.status !== 404) {
+            throw err;
+          }
+
+          const sheetConfig = await getEnquiryConfig(slug).catch((sheetErr) => {
+            console.error(sheetErr);
+            return {};
+          });
+
+          const config = { ...sheetConfig, ...element.dataset };
+
+          if (!config.tallyFormId) {
+            throw err;
+          }
+
+          product = getEnquiryProduct(element.dataset, config);
+
+          enquiry = {
+            formId: config.tallyFormId,
+            display: getString(element.dataset.tallyDisplay, "popup"),
+          };
+        }
 
         return {
           product,
 
           baseUrl,
+
+          enquiry,
 
           options: {
 
@@ -90,6 +150,11 @@ document
             buttonText: getString(
               element.dataset.buttonText,
               "Book Now"
+            ),
+
+            enquiryButtonText: getString(
+              element.dataset.enquiryButtonText,
+              element.dataset.buttonText ?? "Book Now"
             ),
 
             outOfStockText: getString(

@@ -176,6 +176,7 @@
 </template>
 
 <script setup>
+import { toLocalYMD } from "@/utils/date";
 import { ref, computed, watch, onMounted } from "vue";
 import { useDisplay } from "vuetify";
 import apiClient from "@/services/api";
@@ -515,7 +516,7 @@ const toMinutes = (hhmm) => {
 // Pickup time only needs to be restricted when the selected date (from
 // DateField, via the shared `form`) is today - any future date is
 const minAllowedMinutes = computed(() => {
-  const today = new Date().toISOString().split("T")[0];
+  const today = toLocalYMD();
 
   if (props.form.date !== today) return null;
 
