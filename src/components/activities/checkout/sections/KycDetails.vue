@@ -146,6 +146,7 @@
 </template>
 
 <script setup>
+import { toLocalYMD } from "@/utils/date";
 import {
   computed,
   onBeforeUnmount,
@@ -180,7 +181,7 @@ const props = defineProps({
   },
 });
 
-const today = new Date().toISOString().split("T")[0];
+const today = toLocalYMD();
 
 const booking = bookingStore;
 const route = useRoute();
