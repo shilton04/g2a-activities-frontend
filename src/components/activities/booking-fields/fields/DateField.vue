@@ -121,6 +121,14 @@ const props = defineProps({
     type: String,
     default: "",
   },
+
+  // How many days ahead to show in the strip, from the backend's
+  // booking_window_days (inventory window vs. furthest manual schedule,
+  // whichever is greater) - always floored at 60 below.
+  bookingWindowDays: {
+    type: Number,
+    default: 60,
+  },
 });
 const emit = defineEmits(["update:modelValue"]);
 
@@ -139,12 +147,19 @@ const scrollByPage = (direction) => {
   });
 };
 
+// Never show fewer than 60 days, even if the backend reports a smaller
+// (or zero) booking window - vendor products can carry manually-created
+// schedules further out than their configured inventory window covers.
+const bookingDays = computed(() =>
+  Math.max(Number(props.bookingWindowDays) || 0, 60),
+);
+
 // date (ISO string) -> true | false | "unknown", from the calendar API.
 // A date with no entry yet (not fetched, or still loading) renders the
-// same as "unknown" - neutral, not treated as unavailable. Page 1 alone
-// (today .. +3mo) comfortably covers the 60-day strip, so no pagination
-// is needed here.
+// same as "unknown" - neutral, not treated as unavailable.
 const calendarStatus = reactive(new Map());
+
+const CALENDAR_MAX_PAGE = 8;
 
 const calendarSlug = computed(() => {
   if (!props.productSlug || !props.locationSlug) return "";
@@ -167,19 +182,30 @@ const fetchCalendarAvailability = async () => {
 
   calendarStatus.clear();
 
-  try {
-    const { data } = await apiClient.get(
-      `/v1/products/app/${calendarSlug.value}/calendar`,
-      {
-        params: {
-          guests: props.form?.guests || undefined,
-          quantity: props.form?.quantity || undefined,
-        },
-      },
-    );
+  const neededThrough = new Date();
+  neededThrough.setDate(neededThrough.getDate() + bookingDays.value - 1);
 
-    for (const d of data.dates || []) {
-      calendarStatus.set(d.date, d.available);
+  try {
+    // The calendar endpoint pages in fixed ~3-month chunks, so a booking
+    // window beyond the first page needs follow-up pages fetched until
+    // they cover it (or the backend's own page cap is hit).
+    for (let page = 1; page <= CALENDAR_MAX_PAGE; page++) {
+      const { data } = await apiClient.get(
+        `/v1/products/app/${calendarSlug.value}/calendar`,
+        {
+          params: {
+            page,
+            guests: props.form?.guests || undefined,
+            quantity: props.form?.quantity || undefined,
+          },
+        },
+      );
+
+      for (const d of data.dates || []) {
+        calendarStatus.set(d.date, d.available);
+      }
+
+      if (!data.to_date || new Date(data.to_date) >= neededThrough) break;
     }
   } catch (err) {
     console.error("Failed to load product calendar", err);
@@ -189,7 +215,7 @@ const fetchCalendarAvailability = async () => {
 watch(calendarSlug, () => fetchCalendarAvailability(), { immediate: true });
 
 watch(
-  () => [props.form?.guests, props.form?.quantity],
+  () => [props.form?.guests, props.form?.quantity, bookingDays.value],
   () => fetchCalendarAvailability(),
 );
 
@@ -228,7 +254,7 @@ const dates = computed(() => {
   const items = [];
   let lastMonth = "";
 
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < bookingDays.value; i++) {
     const d = new Date();
     d.setDate(d.getDate() + i);
 

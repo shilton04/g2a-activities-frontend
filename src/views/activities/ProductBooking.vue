@@ -108,6 +108,7 @@
             :pricing="pricing"
             :nextAvailableDate="product?.next_available_date"
             :available="result?.available ?? true"
+            :bookingWindowDays="bookingWindowDays"
           />
         </div>
       </v-form>
@@ -648,6 +649,10 @@ const maxQuantity = computed(
 );
 
 const minQuantity = computed(() => pricing.value.min_bookable_per_booking ?? 1);
+
+const bookingWindowDays = computed(
+  () => product.value?.booking_window_days ?? 60,
+);
 
 const availability = computed(() => quotation.value.availability ?? {});
 
