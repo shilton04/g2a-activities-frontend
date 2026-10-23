@@ -81,6 +81,7 @@
 </template>
 
 <script setup>
+import { toLocalYMD, parseYMD } from "@/utils/date";
 import { computed, nextTick, onMounted, reactive, ref, watch } from "vue";
 import { useDisplay } from "vuetify";
 import apiClient from "@/services/api";
@@ -132,7 +133,7 @@ const props = defineProps({
 });
 const emit = defineEmits(["update:modelValue"]);
 
-const today = new Date().toISOString().split("T")[0];
+const today = toLocalYMD();
 
 const stripRef = ref(null);
 const cardRefs = new Map();
@@ -265,7 +266,7 @@ const dates = computed(() => {
       .toUpperCase();
 
     items.push({
-      value: d.toISOString().split("T")[0],
+      value: toLocalYMD(d),
       day: d.toLocaleDateString("en-IN", {
         weekday: "short",
       }),
@@ -289,7 +290,7 @@ const select = (value) => {
 const selectedDateLabel = computed(() => {
   if (!props.modelValue) return "";
 
-  return new Date(props.modelValue).toLocaleDateString("en-IN", {
+  return parseYMD(props.modelValue).toLocaleDateString("en-IN", {
     weekday: "short",
     day: "2-digit",
     month: "short",
@@ -300,7 +301,7 @@ const selectedDateLabel = computed(() => {
 const nextAvailableDateLabel = computed(() => {
   if (!props.nextAvailableDate) return "";
 
-  return new Date(props.nextAvailableDate).toLocaleDateString("en-IN", {
+  return parseYMD(props.nextAvailableDate).toLocaleDateString("en-IN", {
     weekday: "short",
     day: "2-digit",
     month: "short",

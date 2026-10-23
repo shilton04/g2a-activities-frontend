@@ -14,6 +14,7 @@
 </template>
 
 <script setup>
+import { toLocalYMD } from "@/utils/date";
 import { computed } from "vue";
 
 const props = defineProps({
@@ -32,7 +33,7 @@ const props = defineProps({
 
 const emit = defineEmits(["update:modelValue"]);
 
-const today = new Date().toISOString().split("T")[0];
+const today = toLocalYMD();
 
 const minimumDate = computed(() => {
   return props.form.pickup_date || today;
