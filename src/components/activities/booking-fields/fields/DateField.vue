@@ -140,12 +140,31 @@ const scrollByPage = (direction) => {
   });
 };
 
+// How far the strip reaches. A product's bookable range isn't a fixed 60
+// days: vendors configure maintain_inventory_days per product (30, 90,
+// 180 in practice) and can also hand-create schedules past whatever that
+// covers, since schedule creation isn't capped by it. Rather than ask the
+// backend for that number, we read it off the calendar itself - the
+// endpoint already reports real per-day availability from the schedule
+// rows, so the furthest day it marks available IS the bookable horizon.
+const MIN_BOOKING_DAYS = 60;
+
+const bookingDays = ref(MIN_BOOKING_DAYS);
+
 // date (ISO string) -> true | false | "unknown", from the calendar API.
 // A date with no entry yet (not fetched, or still loading) renders the
-// same as "unknown" - neutral, not treated as unavailable. Page 1 alone
-// (today .. +3mo) comfortably covers the 60-day strip, so no pagination
-// is needed here.
+// same as "unknown" - neutral, not treated as unavailable.
 const calendarStatus = reactive(new Map());
+
+// The endpoint pages in 3-month chunks and caps at 8 pages.
+const CALENDAR_MAX_PAGE = 8;
+
+// Always look at least 6 months out before concluding availability has
+// ended. A product with maintain_inventory_days = 0 has no rolling
+// inventory at all, so its first page can come back entirely empty while
+// hand-created schedules sit further along - stopping at the first empty
+// page would hide exactly those dates.
+const CALENDAR_MIN_PAGES = 2;
 
 const calendarSlug = computed(() => {
   if (!props.productSlug || !props.locationSlug) return "";
@@ -163,32 +182,63 @@ const dateStatus = (value) => {
 
 const isDateUnavailable = (value) => calendarStatus.get(value) === false;
 
+// Whole days from today to a "YYYY-MM-DD", counting that day itself, so
+// a date 89 days out yields a 90-day strip that ends on it.
+const daysUntil = (ymd) => {
+  const diffMs = parseYMD(ymd) - parseYMD(today);
+
+  return Math.round(diffMs / 86400000) + 1;
+};
+
 const fetchCalendarAvailability = async () => {
   if (!calendarSlug.value) return;
 
   calendarStatus.clear();
 
-  try {
-    const { data } = await apiClient.get(
-      `/v1/products/app/${calendarSlug.value}/calendar`,
-      {
-        params: {
-          guests: props.form?.guests || undefined,
-          quantity: props.form?.quantity || undefined,
-        },
-      },
-    );
+  let furthestAvailable = "";
 
-    for (const d of data.dates || []) {
-      calendarStatus.set(d.date, d.available);
+  try {
+    for (let page = 1; page <= CALENDAR_MAX_PAGE; page++) {
+      const { data } = await apiClient.get(
+        `/v1/products/app/${calendarSlug.value}/calendar`,
+        {
+          params: {
+            page,
+            guests: props.form?.guests || undefined,
+            quantity: props.form?.quantity || undefined,
+          },
+        },
+      );
+
+      let pageHasAvailable = false;
+
+      for (const d of data.dates || []) {
+        calendarStatus.set(d.date, d.available);
+
+        // String compare is safe (and timezone-proof) on "YYYY-MM-DD".
+        if (d.available === true) {
+          pageHasAvailable = true;
+
+          if (d.date > furthestAvailable) furthestAvailable = d.date;
+        }
+      }
+
+      // Keep paging while availability is still turning up; a page with
+      // none of it means the horizon is behind us.
+      if (page >= CALENDAR_MIN_PAGES && !pageHasAvailable) break;
     }
   } catch (err) {
     console.error("Failed to load product calendar", err);
   }
+
+  bookingDays.value = furthestAvailable
+    ? Math.max(daysUntil(furthestAvailable), MIN_BOOKING_DAYS)
+    : MIN_BOOKING_DAYS;
 };
 
 watch(calendarSlug, () => fetchCalendarAvailability(), { immediate: true });
 
+// Not watching bookingDays here - the fetch is what assigns it.
 watch(
   () => [props.form?.guests, props.form?.quantity],
   () => fetchCalendarAvailability(),
@@ -229,7 +279,7 @@ const dates = computed(() => {
   const items = [];
   let lastMonth = "";
 
-  for (let i = 0; i < 60; i++) {
+  for (let i = 0; i < bookingDays.value; i++) {
     const d = new Date();
     d.setDate(d.getDate() + i);
 
