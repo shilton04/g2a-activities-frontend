@@ -17,7 +17,6 @@
     :pricing="pricing"
     :nextAvailableDate="nextAvailableDate"
     :available="available"
-    :bookingWindowDays="bookingWindowDays"
     @update:modelValue="updateValue"
   />
 
@@ -98,11 +97,6 @@ const props = defineProps({
   available: {
     type: Boolean,
     default: true,
-  },
-
-  bookingWindowDays: {
-    type: Number,
-    default: 60,
   },
 });
 
