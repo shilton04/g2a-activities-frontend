@@ -322,9 +322,24 @@ const pickupDate = computed({
     return props.form.pickup_date || tomorrowString;
   },
   set(value) {
-    if (!isAutoSetting) hasUserSetPickup.value = true;
+    const isUserEdit = !isAutoSetting;
+
+    if (isUserEdit) hasUserSetPickup.value = true;
 
     props.form.pickup_date = value;
+
+    // A time chosen for the previous date shouldn't carry over to the new
+    // one: service hours are re-quoted per date, so a stale pickup time can
+    // end up outside them - and the backend now refuses a pickup_time that
+    // falls outside `availability.service_hours` instead of quoting it.
+    // Reset to the earliest slot rather than clearing, since check-available
+    // 400s on a blank pickup_time. Skipped during our own auto-selection,
+    // which writes the date and the time it wants together.
+    if (isUserEdit) {
+      const firstSlot = PICKUP_TIME_SLOTS.value[0]?.value;
+
+      if (firstSlot) props.form.pickup_time = firstSlot;
+    }
   },
 });
 
