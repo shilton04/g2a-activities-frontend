@@ -30,6 +30,8 @@
             item-title="title"
             item-value="value"
             label="Pickup Time"
+            :error-messages="pickupTimeError ? [pickupTimeError] : []"
+            no-data-text="No pickup times available for this date"
             variant="outlined"
             density="compact"
             hide-details="auto"
@@ -142,7 +144,9 @@ const dayAfterTomorrowString = toLocalYMD(dayAfterTomorrow);
 // generated per window at a fixed 30-minute cadence, merged, deduped and
 // sorted. This also supports overnight windows (e.g. start 22:00, end
 // 06:00) and rounds ragged boundary times like "22:29:00" down/up to the
-// nearest valid slot. With no windows configured, the whole day is used.
+// nearest valid slot. With no windows configured there are no slots at
+// all - never a full-day fallback, since offering times the product
+// doesn't actually serve just produces a pickup the backend will refuse.
 // (Same generator as Pickuptimefield.vue / PickupAndDropLocationField.vue.)
 // ---------------------------------------------------------------------
 
@@ -185,14 +189,11 @@ const formatMinutesToLabel = (totalMinutes) => {
 // Rounds each configured window's start up, and end down, to the nearest
 // slot boundary so every generated option is bookable and none of them
 // spill outside the service window. If a window's end <= start, it's
-// treated as spanning midnight (e.g. 22:00 -> 06:00). No windows at all
-// falls back to the full day, matching the old single-object default.
+// treated as spanning midnight (e.g. 22:00 -> 06:00). With no windows
+// reported for the selected date this stays empty - see the note above
+// on why there's deliberately no full-day fallback.
 const serviceWindows = computed(() => {
   const windows = Array.isArray(props.serviceHours) ? props.serviceHours : [];
-
-  if (!windows.length) {
-    return [{ start: 0, end: MINUTES_IN_DAY }];
-  }
 
   return windows.map((window) => {
     const rawStart = parseTimeToMinutes(window?.start_time, 0);
@@ -259,7 +260,12 @@ const MAX_LOOKAHEAD_DAYS = 90;
 // Walks the fixed daily slot schedule day by day so a lead time that spans
 // more than one day (e.g. 60h) correctly lands on a later date rather than
 // just the first disabled day.
+// Returns null when the product reports no service hours for the picker to
+// work with - there's no sensible time to pre-select then, and inventing
+// one (e.g. "00:00") would put a value the backend rejects into the form.
 const computeNextAvailableSlot = (minLeadHours) => {
+  if (!PICKUP_TIME_SLOTS.value.length) return null;
+
   const cutoff = new Date();
 
   cutoff.setMinutes(
@@ -289,7 +295,7 @@ const computeNextAvailableSlot = (minLeadHours) => {
   // form without a value if it does.
   return {
     date: tomorrowString,
-    time: PICKUP_TIME_SLOTS.value[0]?.value ?? "00:00",
+    time: PICKUP_TIME_SLOTS.value[0].value,
   };
 };
 
@@ -328,28 +334,20 @@ const pickupDate = computed({
 
     props.form.pickup_date = value;
 
-    // A time chosen for the previous date shouldn't carry over to the new
-    // one: service hours are re-quoted per date, so a stale pickup time can
-    // end up outside them - and the backend now refuses a pickup_time that
-    // falls outside `availability.service_hours` instead of quoting it.
-    // Reset to the earliest slot rather than clearing, since check-available
-    // 400s on a blank pickup_time. Skipped during our own auto-selection,
-    // which writes the date and the time it wants together.
-    if (isUserEdit) {
-      const firstSlot = PICKUP_TIME_SLOTS.value[0]?.value;
-
-      if (firstSlot) props.form.pickup_time = firstSlot;
-    }
+    // A time chosen for the previous date isn't automatically valid on the
+    // new one (service hours are re-quoted per date), but it often is - so
+    // the revalidation watcher below decides whether to keep or clear it,
+    // rather than this setter discarding the customer's choice outright.
   },
 });
 
 const pickupTime = computed({
   get() {
-    // Falls back to the first slot rather than "" - pickup_time must
-    // never sit blank, since the check-available API rejects an empty
-    // value outright (a 400, not a normal "unavailable" result), and
-    // slots are no longer disabled client-side to justify clearing it.
-    return props.form.pickup_time || PICKUP_TIME_SLOTS.value[0]?.value || "";
+    // Reports the stored value as-is, with no first-slot fallback: a
+    // cleared pickup_time has to stay visibly empty so the customer is
+    // asked to choose an allowed time (see pickupTimeError), instead of
+    // a guessed value silently standing in for their choice.
+    return props.form.pickup_time || "";
   },
   set(value) {
     if (!isAutoSetting) hasUserSetPickup.value = true;
@@ -408,21 +406,54 @@ watch(
 // `hasUserSetPickup` is what stops it from then fighting a restored
 // booking or the customer's own edit.
 watch(
-  () => props.minBookingLeadHours,
+  [() => props.minBookingLeadHours, PICKUP_TIME_SLOTS],
   () => {
     if (hasUserSetPickup.value) return;
 
-    const { date, time } = computeNextAvailableSlot(
-      props.minBookingLeadHours,
-    );
+    const slot = computeNextAvailableSlot(props.minBookingLeadHours);
+
+    // No service hours to choose from - leave pickup_time empty rather
+    // than pre-selecting something unbookable.
+    if (!slot) return;
 
     isAutoSetting = true;
-    pickupDate.value = date;
-    pickupTime.value = time;
+    pickupDate.value = slot.date;
+    pickupTime.value = slot.time;
     isAutoSetting = false;
   },
   { immediate: true },
 );
+
+// Whenever the pickup date or the product's service hours change, the
+// selected time may no longer be one this product actually serves: hours
+// are re-quoted per date, and a restored or shared booking can arrive
+// holding any value at all. Keep the selection when it's still one of the
+// generated slots, clear it when it isn't - `pickupTimeError` then asks
+// the customer for an allowed time, and ProductBooking.vue keeps
+// "Continue Booking" disabled until a fresh quote comes back for it.
+watch(
+  [pickupDate, PICKUP_TIME_SLOTS],
+  ([, slots]) => {
+    const selected = props.form.pickup_time;
+
+    if (!selected) return;
+
+    const isAllowed = slots.some((slot) => slot.value === selected);
+
+    if (!isAllowed) props.form.pickup_time = "";
+  },
+  { immediate: true },
+);
+
+const pickupTimeError = computed(() => {
+  if (!PICKUP_TIME_SLOTS.value.length) {
+    return "No pickup times available for this date";
+  }
+
+  if (!pickupTime.value) return "Please select an allowed pickup time";
+
+  return "";
+});
 </script>
 
 <style scoped>
