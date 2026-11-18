@@ -396,7 +396,8 @@
             color="brandColor"
             size="large"
             min-width="180"
-            :disabled="loading"
+            :disabled="!canContinue"
+            :loading="loading"
             @click="continueBooking"
           >
             Continue Booking
@@ -856,9 +857,20 @@ const fieldsPayload = () => {
     const keys = FIELD_FORM_KEYS[field.field] || [field.field];
 
     for (const key of keys) {
-      if (key in form) {
-        payload[key] = form[key];
-      }
+      if (!(key in form)) continue;
+
+      const value = form[key];
+
+      // Blank values are left out rather than sent as "", the same way the
+      // first-load branch above does it. check-available validates an
+      // empty string instead of answering with availability - a cleared
+      // pickup time comes back as `"pickup_time" is not allowed to be
+      // empty` - while an absent key simply means "not chosen yet" and
+      // still returns the service hours and pricing the pickers need in
+      // order to offer the customer a valid choice.
+      if (value === "" || value == null) continue;
+
+      payload[key] = value;
     }
   }
 
@@ -869,8 +881,16 @@ const fieldsPayload = () => {
  * API
  */
 
+// Every check-available call takes the next sequence number, and only the
+// newest one is allowed to write to `result`/`estimateId`. Without this a
+// slow earlier request can land after a newer one and leave the page
+// showing availability, pricing and an estimate for the *previous* date or
+// time - which is also why requests are no longer skipped while one is in
+// flight (dropping the newer request had the same effect).
+let latestRequestId = 0;
+
 const checkAvailability = async () => {
-  if (loading.value) return;
+  const requestId = ++latestRequestId;
 
   loading.value = true;
   error.value = "";
@@ -891,6 +911,10 @@ const checkAvailability = async () => {
       payload,
     );
 
+    // A newer request has already been fired (or has already answered) -
+    // this response is about inputs the customer has since changed.
+    if (requestId !== latestRequestId) return;
+
     result.value = data;
     estimateId.value = data.data?.estimate_id || data.estimate_id || null;
 
@@ -902,6 +926,8 @@ const checkAvailability = async () => {
       form.selected_slot_token = data.data.availability.selected_slot.token;
     }
   } catch (e) {
+    if (requestId !== latestRequestId) return;
+
     error.value =
       e.response?.data?.message || e.message || "Unable to check availability.";
 
@@ -909,13 +935,19 @@ const checkAvailability = async () => {
     // Continue button on screen once a request fails - a stale
     // `result.value.available === true` would keep the footer and slot
     // selection rendered against data that's no longer confirmed valid.
+    //
+    // `data` is carried over deliberately: the product, and in particular
+    // `availability.service_hours`, is what the pickup-time picker builds
+    // its options from, so wiping it on a rejected quote would leave the
+    // customer with an empty dropdown and no way to correct the input that
+    // caused the rejection.
     result.value = {
       ...(result.value ?? {}),
       available: false,
       message: error.value,
     };
   } finally {
-    loading.value = false;
+    if (requestId === latestRequestId) loading.value = false;
   }
 };
 
@@ -934,6 +966,13 @@ watch(
   () => {
     if (!result.value) return;
 
+    // The estimate we're holding was quoted for the inputs as they were a
+    // moment ago, so it's void the instant any of them change. Cleared
+    // before the debounce, not after the response, so there's no window
+    // where "Continue Booking" is live against the previous quote - the
+    // next response is what re-enables it.
+    estimateId.value = null;
+
     clearTimeout(debounceTimer);
 
     debounceTimer = setTimeout(() => {
@@ -943,7 +982,35 @@ watch(
   { deep: true },
 );
 
+// A product whose schema renders a pickup time (whichever field owns that
+// key - see FIELD_FORM_KEYS) can't be booked without one. The backend
+// won't enforce it for us here: the payload omits a blank pickup_time
+// rather than sending "" (which it rejects outright), and it will quote
+// the key-absent request quite happily - so the quote coming back
+// available is not on its own evidence that a time has been chosen.
+const needsPickupTime = computed(() =>
+  fields.value.some((field) =>
+    (FIELD_FORM_KEYS[field.field] || [field.field]).includes("pickup_time"),
+  ),
+);
+
+// Only a confirmed, current quote may be carried into checkout: the latest
+// check-available response has to say `available: true` *and* hand back the
+// estimate_id checkout is keyed on. Any input change clears that estimate
+// (see the watcher above) and `loading` covers the in-flight window, so the
+// button can't be used against a quote for a date/time that's been
+// replaced, or one that was never confirmed.
+const canContinue = computed(() => {
+  if (loading.value) return false;
+
+  if (result.value?.available !== true || !estimateId.value) return false;
+
+  return !needsPickupTime.value || !!form.pickup_time;
+});
+
 const continueBooking = async () => {
+  if (!canContinue.value) return;
+
   const { valid } = await bookingForm.value.validate();
 
   let hasError = !valid;
